@@ -13,12 +13,13 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 - Export runs (ZIP with JSON metadata + images) and aggregated CSV summaries.
 - Keep the core solver unchanged; integrate via a thin backend wrapper.
 - Windows-friendly install and run experience; no heavy FE toolchain required for v1.
+- Allow users to browse, filter, and select puzzles directly from `ARC-AGI-2/data/`.
 
 
 ## Scope (Phased)
 
-- Phase 1 (MVP): Single-task run UI, run history, run detail view, export one run as ZIP/JSON, CSV of runs, SQLite persistence, env-based API keys.
-- Phase 2: Batch runs (parallel workers), dataset/task picker with filters, bulk export, simple compare view (predicted vs actual), cancellation if queued.
+- Phase 1 (MVP): Single-task run UI, dataset/task picker with filters from `ARC-AGI-2/data/`, run history, run detail view, export one run as ZIP/JSON, CSV of runs, SQLite persistence, env-based API keys.
+- Phase 2: Batch runs (parallel workers), bulk export, simple compare view (predicted vs actual), cancellation if queued.
 - Phase 3: Observability & UX: live logs/streaming status, thumbnails for images, filtering by status/success, tagging, notes, and cost controls (concurrency limit, rate limit, optional cost capture).
 - Phase 4: Packaging: one command to launch web app on Windows, optional Docker, optional Postgres.
 
@@ -36,7 +37,7 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
   - Images: continue using `img_tmp/` (already used by solver) with predictable names that include `task_name` and labels.
   - DB: `webui_data/app.db` (SQLite). Migrate to Postgres later if needed.
   - Exports: `webui_data/exports/` for ZIP/CSV.
-- Configuration: `.env` for secrets and settings (e.g., `OPENAI_API_KEY`, concurrency limit, dataset root).
+- Configuration: `.env` for secrets and settings (e.g., `OPENAI_API_KEY`, concurrency limit, dataset root). Default concurrency will be 5 workers for hobbyist use.
 
 
 ## Integration Points (existing code)
@@ -72,7 +73,7 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 ## REST API (v1)
 
 - GET /api/datasets → { datasets: ["training", "evaluation"] }
-- GET /api/tasks?dataset=training → [{ name, path }]
+- GET /api/tasks?dataset=training&search=abc&limit=100&offset=0 → [{ name, path }]
 - POST /api/runs → { dataset, task_name, task_path, notes } → { run_id }
 - GET /api/runs → list with filters
 - GET /api/runs/{id} → run metadata + status
@@ -107,7 +108,7 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 
 ## Job Execution Model
 
-- In-process queue using ThreadPoolExecutor with max workers from env (e.g., 2-4 for v1).
+- In-process queue using ThreadPoolExecutor with max workers from env (default: 5 for v1).
 - Each job:
   - Validates task JSON path.
   - Creates a DB Run entry (status=running), timestamps start.
@@ -136,7 +137,7 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 ## Configuration & Security
 
 - Read `OPENAI_API_KEY` from `.env` on server side only; never exposed to browser.
-- `.env` may also include: `DATASET_ROOT=ARC-AGI-2/data`, `WEB_CONCURRENCY=2`, `APP_BASE_URL`, `DB_URL`.
+- `.env` may also include: `DATASET_ROOT=ARC-AGI-2/data`, `WEB_CONCURRENCY=5`, `APP_BASE_URL`, `DB_URL`.
 - Optional auth (Phase 3+) if we later expose externally.
 
 
@@ -161,18 +162,19 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 ## Acceptance Criteria (v1)
 
 - User can select a dataset and task, start a run, and see its status update without a page refresh.
+- Users can browse `ARC-AGI-2/data/`, filter tasks (search), and select which puzzles to run.
 - Run detail page shows success/failure, duration, phases, and links to artifacts found in `img_tmp/`.
 - DB contains a row per run and artifacts per image produced during the run.
 - User can export a run (ZIP) and download CSV of all runs.
 - No changes required to the existing solver files to achieve the above.
 
 
-## Open Questions for Approval
+## Decisions
 
-- Database: OK to start with SQLite in `webui_data/app.db`? (We can add Postgres later.)
-- UI Style: Prefer very simple Bootstrap look for now?
-- Export formats: ZIP with JSON + images and a CSV summary sufficient for your workflow?
-- Batch defaults: Safe default parallelism (e.g., 2 workers) to control cost/time?
+- Database: Use SQLite at `webui_data/app.db`.
+- UI Style: Simple Bootstrap-like styling for MVP; no SPA build step.
+- Exports: Per-run ZIP (JSON + images) and CSV summary.
+- Concurrency: Default `WEB_CONCURRENCY=5` suitable for ≤5 hobbyist users.
 
 
 ## Risks & Mitigations

@@ -1,0 +1,9 @@
+# Requirements for saturn-arc WebUI (FastAPI + Jinja2)
+# Author: Cascade (AI assistant)
+# Purpose: Minimal dependencies for the hobbyist-friendly Web UI. No Node/SPA tooling.
+
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+jinja2==3.1.4
+python-dotenv==1.0.1
+# Let pip resolve pydantic/starlette for your Python version to ensure wheel availability.
