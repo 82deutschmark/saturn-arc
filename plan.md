@@ -1,6 +1,6 @@
 # WebUI Implementation Plan for saturn-arc
 
-Author: Cascade with GPT-5 (medium reasoning model)
+Author: GPT-5 (medium reasoning)
 
 Purpose: This plan outlines how we will add a simple, effective Web UI to operate the existing ARC-AGI visual solver without disrupting core code. It focuses on usability, observability, saving and exporting results, and persisting them in a database.
 
@@ -26,30 +26,29 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 
 ## Architecture Overview
 
-- Backend: Python web service (FastAPI) to:
-  - Invoke `ARCVisualSolver` from `arc_visual_solver.py` in background workers.
-  - Manage a lightweight in-process job queue (ThreadPoolExecutor) for runs.
-  - Persist runs and artifacts metadata in SQLite via SQLAlchemy.
-  - Serve a simple server-rendered UI (Jinja2 templates) for ease of installation.
-  - Provide JSON REST endpoints for programmatic use and future SPA.
-- Frontend: Server-rendered HTML (Jinja2) + light interactivity (htmx/Alpine.js) for MVP. No Node build step for v1.
+- Backend: Node.js web service (Express) to:
+  - Invoke the Python solver via a child process (Phase 1): spawn Python to run a small runner script that calls `ARCVisualSolver` and returns JSON.
+  - Manage a lightweight in-process job queue (in-memory) with configurable concurrency (default 5 via `WEB_CONCURRENCY`).
+  - Persist runs and artifact metadata in SQLite using a Node driver (better-sqlite3 or sqlite3, see Data Model).
+  - Serve server-rendered UI (EJS templates) for easy Windows setup.
+  - Provide JSON REST endpoints for automation.
+- Frontend: Server-rendered HTML (EJS) + minimal JS. No SPA build step for v1.
 - Storage:
-  - Images: continue using `img_tmp/` (already used by solver) with predictable names that include `task_name` and labels.
-  - DB: `webui_data/app.db` (SQLite). Migrate to Postgres later if needed.
-  - Exports: `webui_data/exports/` for ZIP/CSV.
-- Configuration: `.env` for secrets and settings (e.g., `OPENAI_API_KEY`, concurrency limit, dataset root). Default concurrency will be 5 workers for hobbyist use.
+  - Images: continue using `img_tmp/` with file names including `task_name` and image roles.
+  - DB: `webui-node/webui_data/app.db` (SQLite). Optional Postgres later.
+  - Exports: `webui-node/webui_data/exports/` for ZIP/CSV.
+- Configuration: `.env` for secrets and settings (e.g., `OPENAI_API_KEY`, `DATASET_ROOT`, `WEB_CONCURRENCY`, `PORT`). Default concurrency is 5.
 
 
 ## Integration Points (existing code)
 
 - `arc_visual_solver.py` → class `ARCVisualSolver`:
-  - We will import and call `ARCVisualSolver().solve(<task_json>)` inside a worker.
-  - It already saves intermediate and final images in `img_tmp/` and returns `(success, prediction, num_phases)`.
+  - We will create a small Python runner script that imports `ARCVisualSolver` and runs `solve(<task_json_path>)`, then prints a JSON summary to stdout.
+  - Node will spawn this runner via `child_process.spawn` (Phase 1). The solver will continue saving images to `img_tmp/`.
 - `run_batch.py`:
-  - Reuse its dataset discovery logic (e.g., list of JSON files in `ARC-AGI-2/data/<dataset>/`).
-  - For batch execution, replicate selection logic in the web backend rather than shelling out.
+  - Reuse its dataset discovery approach (list JSON files under `ARC-AGI-2/data/<dataset>/`). Batch submission logic will live in the Node backend.
 - `arc_visualizer.py`/`arc_stdin_visualizer.py`:
-  - No changes needed; optional use for generating artifacts if we add advanced compare tools.
+  - No changes needed; optional future utilities for visualization.
 
 
 ## Core Features & Pages (v1)
@@ -82,7 +81,7 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 - GET /api/exports/runs.csv → CSV of runs
 
 
-## Data Model (SQLite via SQLAlchemy)
+## Data Model (SQLite via better-sqlite3 or sqlite3 on Node)
 
 - Run
   - id (uuid)
@@ -108,14 +107,14 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 
 ## Job Execution Model
 
-- In-process queue using ThreadPoolExecutor with max workers from env (default: 5 for v1).
+- In-process queue in Node with a fixed worker concurrency (`WEB_CONCURRENCY`, default 5).
 - Each job:
-  - Validates task JSON path.
-  - Creates a DB Run entry (status=running), timestamps start.
-  - Calls `ARCVisualSolver().solve(path)`.
-  - Parses return values, infers prediction dims, scans `img_tmp/` for files matching `task_name_*` created during the run, and records them as Artifacts.
-  - Updates status/success/finished_at/duration.
-  - Captures stdout to a log file per run (basic observability); stores a short summary in DB.
+  - Validates the task JSON path and dataset membership.
+  - Creates a DB Run entry (status=queued → running), timestamps `started_at`.
+  - Spawns Python runner to invoke `ARCVisualSolver` with the task path.
+  - Parses JSON result, infers prediction dimensions, scans `img_tmp/` for files matching `task_name_*` produced during the run, and records them as Artifacts.
+  - Captures stdout/stderr to a per-run log file; stores a short summary snippet in DB.
+  - Updates status/success/`finished_at`/duration.
 
 
 ## Exports
@@ -143,11 +142,14 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 
 ## Directory Additions (new)
 
-- webui/
-  - app/ (FastAPI app: routers, models, services, templates, static)
-  - webui_data/ (SQLite DB, exports/)
+- webui-node/
+  - views/ (EJS templates)
+  - public/ (static assets)
   - scripts/ (Windows helper scripts to run the app)
-  - requirements-webui.txt (web dependencies; core remains untouched)
+  - server.js (Express entrypoint)
+  - package.json (Node dependencies)
+  - webui_data/ (app.db, exports/)
+  - (Phase 1) python/solver_runner.py (invoked by Node child process)
 
 
 ## Delivery Plan & Milestones
@@ -186,4 +188,58 @@ Purpose: This plan outlines how we will add a simple, effective Web UI to operat
 
 ## Next Step
 
-- Upon approval, I will scaffold `webui/` with FastAPI + Jinja2, define the DB models, implement the run queue, and wire the MVP screens without touching existing solver code.
+- Implement Phase 1:
+  - Add SQLite persistence (create `webui-node/webui_data/app.db` on first run; use better-sqlite3 or sqlite3).
+  - Implement run submission endpoint and in-memory queue with concurrency from `WEB_CONCURRENCY`.
+  - Add Python `solver_runner.py` and wire Node child process execution.
+  - Build Run list/detail pages with artifact discovery from `img_tmp/`.
+  - Implement single-run ZIP export and CSV export of runs.
+
+---
+
+## DB Schema (SQL)
+
+We will initialize the SQLite database with the following tables:
+
+```
+CREATE TABLE IF NOT EXISTS runs (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  dataset TEXT NOT NULL,
+  task_name TEXT NOT NULL,
+  task_path TEXT NOT NULL,
+  status TEXT NOT NULL,                -- queued | running | success | fail
+  success INTEGER NOT NULL DEFAULT 0,  -- 0/1
+  duration_seconds REAL,
+  phases INTEGER,
+  prediction_rows INTEGER,
+  prediction_cols INTEGER,
+  notes TEXT,
+  error_message TEXT,
+  log_path TEXT
+);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  type TEXT NOT NULL,                  -- train_input | train_output | test_input | test_output | tool | final_prediction | other
+  file_path TEXT NOT NULL,
+  label TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at);
+CREATE INDEX IF NOT EXISTS idx_artifacts_run ON artifacts(run_id);
+```
+
+Statuses are restricted to: queued, running, success, fail.
+
+## Environment Variables
+
+- OPENAI_API_KEY: used by the Python solver (server-side only)
+- DATASET_ROOT: default `ARC-AGI-2/data`
+- WEB_CONCURRENCY: default `5`
+- PORT: Node server port, default `5000`
+- DB_PATH: optional override, default `webui-node/webui_data/app.db`
